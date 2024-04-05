@@ -1,0 +1,140 @@
+---
+title: "Functional Annotation with ClusterProfiler"
+author: "Tania Quesada-López"
+date: "03.03.2024 - 09.03.2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Overenrichment analysis.
+Functional annotation of the DEGs with ClusterProfiler.
+
+Automated label generation is allowed to associate these clusters with biological themes or processes of which the member gene sets are part of (such as `KEGG`, `Reactome`, and `Biocarta`pathways), based on a Jaccard index of a given threshold. 
+
+1) Load data
+The pathway analysis pipeline accepts count matrix files with """Ensembl ID""" as row
+names. We can use our *Final Data* df.
+
+2) Load necessary packages
+
+```{r}
+# To intall 
+# devtools::install_github("YuLab-SMU/clusterProfiler")
+
+require(clusterProfiler)
+require(dbplyr)
+require(sparklyr)
+require(GSEA)
+require(tibble)
+library("RColorBrewer")
+library("ggplot2")
+library("gplots")
+library("cowplot")
+library("ggrepel")
+library("reshape2")
+library("knitr")
+library("kableExtra")
+library("igraph")
+library("GGally")
+library("DESeq2")
+library("limma")
+library("wordcloud")
+library("tm")
+library("SnowballC")
+library("intergraph")
+library("DT")
+# library for mouse or human
+# library("org.Hs.eg.db") # for human
+library("org.Mm.eg.db") # for mouse
+
+```
+
+3) Run annotation 
+Using log2FC and Symbol as rownames. GO annotation allows the use of *Symbol*. 
+
+```{r}
+# --- Over-representation analysis
+organism <- org.Mm.eg.db
+
+FinalData2 <- rownames_to_column(as.data.frame(FinalData)) # Get data with a column with the Symbol
+df <- FinalData2[,c(1,26:31)] # Drop rows with info on expression
+original_gene_list <- df$CE_vs_RTlog2FoldChange # Pull-out fold changes in response to cold
+names(original_gene_list) <- df$rowname # Name those log2FoldChanges
+
+gene_list = sort(original_gene_list, decreasing = TRUE) # ¡! Data should be sorted for ClusterProfiler
+
+## Get GO terms for biological processes
+gse <- gseGO(geneList=gene_list, 
+             ont ="BP", 
+             keyType = "SYMBOL", 
+             minGSSize = 10, 
+             maxGSSize = 1000, 
+             pvalueCutoff = 0.05, 
+             verbose = TRUE, 
+             OrgDb = organism, 
+             pAdjustMethod = "none")
+
+foo <- as.data.frame(gse)
+
+# write_xlsx(foo,  path =  "GO_RT.xlsx",
+#           col_names = TRUE, format_headers = TRUE, use_zip64 = FALSE)
+
+require(DOSE)
+dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+ridgeplot(gse) + labs(x = "enrichment distribution")
+# Use the `Gene Set` param for the index in the title, and as the value for geneSetId
+gseaplot(gse, by = "all", title = gse$Description[2], geneSetID = 2)
+
+
+gseBP <- gseGO(geneList=gene_list, 
+               ont ="BP", 
+               keyType = "SYMBOL", 
+               nPerm = 10000, 
+               minGSSize = 5, 
+               maxGSSize = 800, 
+               pvalueCutoff = 0.05, 
+               verbose = TRUE, 
+               OrgDb = organism, 
+               pAdjustMethod = "BH")
+
+foo <- summary(gseBP)
+GO_BPordered <- arrange(foo, desc(enrichmentScore), p.adjust)
+dotplot(gseBP, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+```
+
+4) Mapping Ensembl IDs to ENTREZ IDs
+Maps *Symbol* to *ENTREZ IDs* wiht `org.Mm.eg.db` package (`UCSC` annotation database)
+*Keep only genes with a unique mapping.
+While GO annotation can worj with 
+
+
+```{r}
+# Convert gene IDs for gseKEGG function
+# We will lose some genes here because not all IDs will be converted
+colnames(sig_Condition)[1] <- c("SYMBOL") ## This df is ordered
+data(geneList, package="DOSE")
+keytypes(org.Mm.eg.db)
+eg <- bitr(sig_Condition$SYMBOL, "SYMBOL", "ENTREZID", OrgDb = "org.Mm.eg.db")
+
+gene_list2 <-eg[,2]
+
+Res_Kegg <- enrichKEGG(gene_list2, organism = "mmu", keyType = "kegg", 
+                       pvalueCutoff = 0.05, pAdjustMethod = "fdr", minGSSize = 10, maxGSSize = 500)
+
+head(Res_Kegg)
+foo <- summary(Res_Kegg)
+KEGGordered <- arrange(foo, desc(qvalue))
+
+
+dotplot(Res_Kegg)
+
+
+```
+
+
